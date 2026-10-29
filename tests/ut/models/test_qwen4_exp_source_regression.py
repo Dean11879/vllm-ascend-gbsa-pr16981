@@ -83,7 +83,7 @@ def test_qsa_metadata_ignores_full_graph_dummy_request_boundaries() -> None:
 def test_qsa_uses_only_fused_runtime_backends() -> None:
     qsa = _source("vllm_ascend/models/qwen4_exp/qsa.py")
     assert "return qsa_select_paged_tokens_lightning(" in qsa
-    assert "return qsa_gbsa_attention(" in qsa
+    assert "return dispatch_qsa_attention(" in qsa
     assert "torch.ops.vllm.triton_qsa_rmsnorm_mrope(" in qsa
     assert "torch.ops.vllm.triton_split_qkv_rmsnorm_mrope(" in qsa
     for fallback in (

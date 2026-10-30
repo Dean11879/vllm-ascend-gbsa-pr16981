@@ -177,17 +177,10 @@ def test_fia_route_uses_logical_kv_boundary(implementation, kv_length, prefill, 
     assert plan[0].use_fia is use_fia
 
 
-def test_prefill_crossing_24k_keeps_the_whole_chunk_on_fia(implementation):
-    plan = implementation["build_qsa_request_plan"](
-        torch.tensor([0, 4]), torch.tensor([24578]), 4, torch.tensor([True])
-    )
-    assert plan[0].fia_query_end == 4
-    assert plan[0].gbsa_query_start == 4
-
-
 @pytest.mark.parametrize(
     "query_length,kv_length,expected_fia",
     [
+        (4, 24578, True),
         (4096, 24576, True),
         (4096, 28671, True),
         (4096, 28672, False),

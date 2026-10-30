@@ -1,6 +1,0 @@
-pr: 20304
-entries:
-  - category: performance
-    text: Qwen3.8 Prefill uses FIA with a selected-token mask for chunks starting below 24K cached logical KV tokens and GBSA for later chunks. Decode continues to use GBSA with graph replay support.
-  - category: bugfix
-    text: Bounded FIA mask initialization prevents long Prefill masks from overflowing on-chip buffers during Triton compilation, including large initial chunks that remain on FIA.

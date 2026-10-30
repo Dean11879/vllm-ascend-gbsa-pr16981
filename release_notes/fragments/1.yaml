@@ -1,6 +1,0 @@
-pr: 1
-entries:
-  - category: performance
-    text: Reduced Qwen4Exp GBSA input-preparation overhead by fusing sparse-index compaction, residual-block handling and per-query metadata preparation.
-    model: Qwen3.8-Flash-Next
-    hardware: [A3]

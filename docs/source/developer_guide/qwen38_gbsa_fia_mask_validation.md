@@ -15,14 +15,20 @@ Add a release note fragment with the assigned PR number when preparing a PR.
 
 | Request phase | Attention path |
 | --- | --- |
-| Pure Prefill | FIA with a selected-token mask, independent of sequence length |
+| Pure Prefill | FIA with a selected-token mask when the chunk starts below 24K logical KV, including a chunk that crosses 24K; GBSA when the chunk starts at or above 24K |
 | Pure Decode | Optimized GBSA, including multi-token Decode |
-| Mixed Prefill and Decode | Process Prefill requests first, then contiguous Decode spans through GBSA |
+| Mixed Prefill and Decode | Route each Prefill chunk independently by its cached-prefix logical KV length; coalesce GBSA Prefill chunks and Decode rows |
 
-The scheduler's CPU `is_prefilling` flags determine request phase. Query length
-and KV length do not determine phase. Prefill without history uses current K/V;
-chunked Prefill with history reads paged KV. Request IDs and output row positions
-are preserved when splitting mixed batches. Unknown phase metadata is rejected.
+The scheduler's CPU `is_prefilling` flags determine request phase. Within
+Prefill, the per-request logical visible KV length selects the backend at the
+24K (24576-token) chunk-start boundary. A Prefill chunk whose cached prefix is
+shorter than 24K stays entirely on FIA even when the chunk crosses 24K.
+The decision uses `kv_length - query_length`, excluding the current chunk.
+`kv_length` itself includes both cached history and the current chunk; neither
+value is the padded physical cache capacity.
+Prefill without history uses current K/V; chunked Prefill with history reads
+paged KV. Request IDs and output row positions are preserved when splitting
+mixed batches. Unknown phase metadata is rejected.
 
 Decode uses the GBSA-only graph path. Capture does not freeze CPU KV lengths or
 a Prefill decision into the graph. A Qwen4Exp-only Model Runner V2 guard prevents
@@ -34,7 +40,19 @@ recover the original phase after it has been relabeled.
 
 The dense temporary mask is tiled along Q with a 64 MiB mask budget and at most
 4096 query rows per tile. This budget describes mask dimensions, not total
-temporary allocation. There is no 16K dispatch threshold.
+temporary allocation. Prefill chunks starting at or above the 24K logical-KV threshold do not build
+the FIA mask and instead use GBSA.
+
+Mask initialization also uses bounded tiles of at most 4096 int32 words along
+the KV columns. This bounds the on-chip initialization vector independently of
+the query tile and preserves every mask column. The guard is still necessary:
+a large initial Prefill chunk has a zero cached prefix and therefore uses FIA,
+even when that single chunk extends well beyond 24K. The dispatch threshold
+does not replace the long-mask UB overflow fix.
+
+For example, a chunk ending at logical KV 24576 with Q=4096 starts at 20480
+and uses FIA. The next Q=4096 chunk starts at 24576 and uses GBSA. A chunk
+starting at 24575 stays entirely on FIA, including its rows above the threshold.
 
 ## Changed implementation
 
@@ -52,11 +70,31 @@ custom operator binary, global patch, or other model-specific implementation.
 The FIA helper retains batched-call support, but request dispatch never routes
 Decode to FIA.
 
-CPU regression coverage includes phase boundaries, mixed request ordering,
+CPU regression coverage includes phase and 24K logical-KV boundaries, mixed request ordering,
 one-token Prefill, multi-token Decode, padding, missing metadata, paged cache
 strides, selected masks, residual groups and long-Prefill tiling.
 
-## Observed validation on 2026-10-29
+## Dispatch integration on 2026-10-30
+
+The 24K chunk-start policy is ported from PR20304 commit `bf5999985` onto
+the GBSA-optimized FIA branch with the bounded mask fix (`db7550c04`). The
+GBSA adapter, fused preparation kernel, QSA pack kernel and bounded FIA mask
+kernel are unchanged from that parent. The focused CPU suite passes 557 tests,
+including 4K chunks immediately below and at the boundary and a large initial
+chunk that must remain on FIA.
+
+The bounded mask fix was separately validated on A3: the old kernel failed
+with UB overflow at 129024 and 131072 logical KV tokens with 512 candidates;
+20 mask-reference checks and 13 native FIA checks passed after the fix. Four
+TP8 full-model Prefill requests at 129023, 129024, 129025 and 131072 tokens
+completed with 512 FIA candidate groups. That earlier validation did not use
+the 24K dispatch policy and does not establish its performance or graph replay.
+Fresh full-model profiling of this integrated branch remains required.
+
+## Historical all-FIA Prefill validation on 2026-10-29
+
+The observations below predate the 24K policy and must not be attributed to
+the integrated dispatch branch.
 
 The selected CPU test set passed 545 tests. This is not a full-repository suite:
 
